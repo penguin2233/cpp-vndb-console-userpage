@@ -8,6 +8,8 @@
 #include <boost/bind.hpp>
 #include <boost/asio.hpp>
 
+// Copyright (c) 2021 https://penguin2233.gq, no warranty is provided
+
 const std::string CLIENT_NAME = "cpp-vndb-console-userpage";
 const std::string CLIENT_VER = "MZ-E620-win";
 
