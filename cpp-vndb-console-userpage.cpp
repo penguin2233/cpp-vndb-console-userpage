@@ -8,7 +8,7 @@
 #include <boost/bind.hpp>
 #include <boost/asio.hpp>
 
-// Copyright (c) 2021 https://penguin2233.gq, no warranty is provided
+// Copyright (c) 2022 https://penguin2233.gq, no warranty is provided
 
 const std::string CLIENT_NAME = "cpp-vndb-console-userpage";
 const std::string CLIENT_VER = "MZ-E620-win";
@@ -60,6 +60,78 @@ std::string fetchString(std::string request) {
 	return response;
 }
 
+std::vector<std::string> parseArray(std::string searchTerm, std::string raw, bool arrayOfObjects, bool removeQuotes, bool isolate) {
+	std::vector<std::string> ret;
+	size_t arrayStart;
+	size_t arrayEnd;
+	bool listEnd = false;
+
+	if (!arrayOfObjects) arrayStart = raw.find("\"" + searchTerm + "\":[");
+	else if (arrayOfObjects) arrayStart = raw.find("\"" + searchTerm + "\":{");
+	if (arrayStart != std::string::npos) {
+		std::string secondPass = raw.substr(arrayStart + 1 + searchTerm.size() + 3, raw.size());
+		if (!arrayOfObjects) arrayEnd = secondPass.find("],\"");
+		else if (arrayOfObjects) arrayEnd = secondPass.find("},\"");
+		secondPass = secondPass.substr(0, arrayEnd);
+		while (!listEnd) {
+			size_t itemEnd = secondPass.find(",\"");
+			if (itemEnd != std::string::npos) {
+				ret.push_back(secondPass.substr(0, itemEnd));
+				secondPass.erase(0, itemEnd + 1);
+			}
+			else listEnd = true;
+		}
+		// get last item in array
+		ret.push_back(secondPass.substr(0, arrayEnd));
+	}
+	else return ret; // return empty
+
+	if (ret.size() == 1 && (ret[0] == "null" || ret[0] == "\"null\"") && !isolate) {
+		ret.clear();
+		return ret;
+	}
+
+	if (removeQuotes) {
+		for (size_t i = 0; i < ret.size(); i++) {
+			if (ret[i].size() > 3) {
+				if (ret[i].size() > 2 && ret[i][ret[i].size() - 1] == ']' || ret[i].size() > 2 && ret[i][ret[i].size() - 2] == '}') {
+					if (ret[i][ret[i].size() - 2] == '}') {
+						if (ret[i][ret[i].size() - 1] == 0x04) ret[i].erase(ret[i].size() - 5, ret[i].size());
+						else if (ret[i][ret[i].size() - 3] == ']')  ret[i].erase(ret[i].size() - 4, ret[i].size());
+						else ret[i].erase(ret[i].size() - 2, ret[i].size());
+					}
+					if (ret[i][ret[i].size() - 2] == ']') {
+						ret[i].erase(ret[i].size() - 3, ret[i].size());
+					}
+				}
+			}
+			if (ret[i].size() > 2 && ret[i][0] == '\"' && ret[i][ret[i].size() - 1] == '\"') {
+				ret[i] = ret[i].substr(1, ret[i].size() - 2);
+			}
+		}
+	}
+	else if (!removeQuotes) {
+		for (size_t i = 0; i < ret.size(); i++) {
+			if (ret[i][ret[i].size() - 1] == ']' || ret[i][ret[i].size() - 1] == '}' || ret[i][ret[i].size() - 2] == '}') {
+				if (ret[i][ret[i].size() - 2] == '}') {
+					if (ret[i][ret[i].size() - 3] == ']')  ret[i].erase(ret[i].size() - 4, ret[i].size());
+					else ret[i].erase(ret[i].size() - 2, ret[i].size());
+				}
+				if (ret[i][ret[i].size() - 2] == ']') {
+					ret[i].erase(ret[i].size() - 3, ret[i].size());
+				}
+			}
+		}
+	}
+
+	if (isolate) { // give back raw as last element of vector but without array we just parsed
+		raw.erase(arrayStart, 1 + searchTerm.size() + 3 + arrayEnd + 2);
+		ret.push_back(raw);
+	}
+
+	return ret;
+}
+
 std::string parseString(std::string searchTerm, std::string raw, bool integer, bool removeQuotes) {
 	std::string ret;
 	size_t location = raw.find("\"" + searchTerm + "\":");
@@ -73,39 +145,43 @@ std::string parseString(std::string searchTerm, std::string raw, bool integer, b
 		std::string secondPass = raw.substr(location + 1 + searchTerm.size() + 2, raw.size());
 		size_t end = secondPass.find(",\"");
 		std::string value = secondPass.substr(0, end);
-		if (value == "null" || value == "") {
-			ret = "";
-			if (integer == true) ret = "0";
+		if (value == "null" || value == "null}]" || value == "null}") {
+			if (integer == true) return "0"; else return "";
 		}
-		else if (value[0] == '\"' && removeQuotes) {
+		else ret = value;
+		if (value[0] == '\"' && removeQuotes) {
 			value = value.substr(1, value.size() - 2);
-			if (value.size() > 2 && value[value.size() - 1] == ']' || value.size() > 2 && value[value.size() - 2] == '}') {
-				if (value[value.size() - 2] == '}') {
+			if (value.size() > 2 && value[value.size() - 1] == ']' || value.size() > 2 && value[value.size() - 1] == '}') {
+				if (value.size() > 10 && value[value.size() - 5] != 'u' && value[value.size() - 4] != 'r' && value[value.size() - 3] != 'l') {
+						if (value[value.size() - 2] == ']') {
+							value.erase(value.size() - 3, value.size());
+						}
+						if (value[value.size() - 2] == '}') {
+							if (value[value.size() - 3] == ']')  value.erase(value.size() - 4, value.size());
+							else value.erase(value.size() - 2, value.size());
+						}
+				}
+				/*if (value[value.size() - 2] == '}') {
 					if (value[value.size() - 3] == ']')  value.erase(value.size() - 4, value.size());
 					else value.erase(value.size() - 2, value.size());
-				}
-
-				if (value[value.size() - 2] == ']') {
-					value.erase(value.size() - 3, value.size());
-				}
+				}*/
 			}
 			ret = value;
 		}
-		else if (value.size() > 2 && !removeQuotes) {
+		if (value.size() > 3 && !removeQuotes) {
 			if (value[value.size() - 1] == ']' || value[value.size() - 2] == '}') {
 				if (value[value.size() - 2] == '}') {
 					if (value[value.size() - 3] == ']')  value.erase(value.size() - 4, value.size());
 					else value.erase(value.size() - 2, value.size());
 				}
-				if (value[value.size() - 2] == ']') {
-					value.erase(value.size() - 3, value.size());
+				else if (value[value.size() - 2] == ']') {
+					value.erase(value.size() - 2, value.size());
 				}
 			}
 			ret = value;
 		}
-		else ret = value;
 	}
-	else ret = "";
+	else if (integer) ret = "0"; else ret = "";
 	return ret;
 }
 
@@ -129,7 +205,7 @@ void parseVNs() {
 }
 
 void userPage() {
-	for (size_t i = 0; i < VNs.size(); i++) {
+	for (int i = static_cast<int>(VNs.size() - 1); i >= 0; i--) { // display VNs in reverse order with latest modified at top
 		// auto t1 = std::chrono::high_resolution_clock::now();
 		std::string parse = fetchString("get vn basic (id = " + std::to_string(VNs[i].vn) + ')');
 		/*auto t2 = std::chrono::high_resolution_clock::now();
@@ -140,11 +216,12 @@ void userPage() {
 
 		std::string title = parseString("title", parse, false, false);
 		std::string original = parseString("original", parse, false, false);
-		if (title != "") std::cout << "Title: " << title << "   ";
+		std::cout << "Title: " << title << "   ";
 		if (original != "") std::cout << "Original Name: " << original << "   ";
 
 		std::cout << '\n';
-		std::cout << "Notes: " << VNs[i].notes;
+		if (VNs[i].notes != "") std::cout << "Notes: " << VNs[i].notes << '\n';
+		if (VNs[i].vote != 0) std::cout << "Vote: " << VNs[i].vote;
 
 		std::cout << "\n\n";
 	}
@@ -194,6 +271,43 @@ void lastmod10() {
 	return;
 }
 
+void displayByLabel(std::string labelName, std::string labelID) {
+	std::string parse = fetchString("get ulist basic (uid = " + uid + " and label = " + labelID + ") {\"results\":10,\"sort\":\"lastmod\"}");
+
+	int num = stoi(parseString("num", parse, true, false));
+	if (num == 0) {
+		std::cout << "No visual novels to display. \n\n";
+		return;
+	}
+
+	std::size_t foundListStart = parse.find("[{");
+	parse = parse.substr(foundListStart + 2, parse.size());
+
+	for (int i = 0; i < num; i++) {
+		std::size_t foundEnd = parse.find("},");
+		if (foundEnd != std::string::npos) {
+			VNsRaw.push_back(parse.substr(0, foundEnd));
+			parse.erase(0, foundEnd + 2);
+		}
+	}
+
+	// get last in the list
+	std::size_t foundEnd = parse.find("}]");
+	if (foundEnd != std::string::npos) {
+		VNsRaw.push_back(parse.substr(0, foundEnd));
+		parse.erase(0, foundEnd + 2);
+	}
+
+	parseVNs();
+	VNsRaw.clear();
+
+	std::cout << "Displaying " << num << " VNs with label \"" << labelName << "\". \n\n";
+
+	userPage();
+
+	return;
+}
+
 void lookupUser() {
 	std::string tempUID;
 	bool needUID = true;
@@ -233,6 +347,8 @@ void lookupUser() {
 					lookupUsername = false;
 				}
 			}
+
+			std::cout << '\n';
 
 			if (lookupUsername) {
 				std::string response = fetchString("get user basic (id = " + input + ')');
@@ -285,6 +401,8 @@ void lookupUser() {
 				return;
 			}
 
+			std::cout << '\n';
+
 			std::size_t foundListStart = parse.find("[{");
 			parse = parse.substr(foundListStart + 2, parse.size());
 
@@ -330,8 +448,202 @@ void lookupUser() {
 }
 
 void lookupVN() {
+	bool ask = true;
+	std::string input;
+	std::string vnid;
 	std::cout << '\n';
-	std::cout << "What do you want to look up? (user/user-labels/staff/character/producer/release/vn): ";
+	std::string parse;
+	std::string title;
+	while (ask) {
+		std::cout << "Lookup by ID or Title? (id/title): ";
+		std::cin >> input;
+		if (input == "id") {
+			std::cout << "\nVNID: ";
+			std::cin >> vnid;
+			std::cin.ignore();
+			try {
+				stoi(vnid);
+				ask = false;
+			}
+			catch (std::invalid_argument) {
+				std::cout << "\nInvalid input. \n";
+				continue;
+			}
+			catch (std::out_of_range) {
+				std::cout << "\nInvalid input. \n";
+				continue;
+			}
+			parse = fetchString("get vn basic,details,stats (id =  " + vnid + ")");
+		}
+		else if (input == "title") {
+			std::cout << "\nTitle: ";
+			std::cin >> std::ws;
+			getline(std::cin, title);
+			ask = false;
+			parse = fetchString("get vn basic,details,stats (title =  \"" + title + "\")");
+		}
+		else std::cout << "\nInvalid input. \n";
+	}
+
+	int matches = 0;
+	for (int i = 0; i <= 5; i++) {
+		if (parse[i] == "error"[i]) matches++;
+	}
+	if (matches == (5)) {
+		std::string error = parseString("msg", parse, false, false);
+		if (error == "\"Invalid identifier\"") {
+			std::cout << parse;
+			return;
+		}
+	}
+	int num = stoi(parseString("num", parse, true, false));
+	if (num == 0) {
+		std::cout << "No results found. \n";
+		return;
+	}
+
+	// basic
+	vnid = parseString("id", parse, true, false);
+	title = parseString("title", parse, false, false);
+	std::string original = parseString("original", parse, false, false);
+	std::string released = parseString("released", parse, false, true);
+	std::vector<std::string> languages = parseArray("languages", parse, false, true, false);
+	std::vector<std::string> originalLanguages = parseArray("orig_lang", parse, false, true, false);
+	std::vector<std::string> platforms = parseArray("platforms", parse, false, true, false);
+
+	// details
+	int length = stoi(parseString("length", parse, true, false));
+	std::string description = parseString("description", parse, false, true);
+
+	// details - aliases
+	std::vector<std::string> aliases;
+	std::string aliasesRaw = parseString("aliases", parse, false, true);
+	if (aliasesRaw != "") {
+		bool listEnd = false;
+		while (!listEnd) {
+			size_t location = aliasesRaw.find("\\n");
+			if (location != std::string::npos) {
+				aliases.push_back('\"' + aliasesRaw.substr(0, location) + '\"');
+				aliasesRaw.erase(0, location + 2);
+			}
+			else listEnd = true;
+		}
+		if (aliasesRaw[aliasesRaw.size() - 2] == '}') aliasesRaw = aliasesRaw.substr(0, aliasesRaw.size() - 3);
+		aliases.push_back('\"' + aliasesRaw + '\"');
+		if (aliases[aliases.size() - 1][aliases[aliases.size() - 1].size() - 1] == '\"' 
+			&& aliases[aliases.size() - 1][aliases[aliases.size() - 1].size() - 2] == '}'
+			&& aliases[aliases.size() - 1][aliases[aliases.size() - 1].size() - 3] == ']'
+			&& aliases[aliases.size() - 1][aliases[aliases.size() - 1].size() - 4] == '\"') {
+			aliases[aliases.size() - 1] = aliases[aliases.size() - 1].substr(0, aliases.size() - 4);
+		}
+	}
+
+	// stats
+	float popularity = stof(parseString("popularity", parse, true, false));
+	float rating = stof(parseString("rating", parse, true, false));
+	int votecount = stoi(parseString("votecount", parse, true, false));
+
+	// display
+	std::cout << "\n\n";
+	std::cout << "VNID: " << vnid << "   ";
+	std::cout << "Title: " << title << "   ";
+	if (original != "") std::cout << "Original Name: " << original << "\n\n"; else std::cout << "\n\n";
+	if (released != "") std::cout << "Released: " << released << '\n'; else std::cout << '\n';
+	std::cout << "Original Language(s): ";
+	for (size_t i = 0; i < originalLanguages.size(); i++) {
+		std::cout << originalLanguages[i] << ' ';
+	}
+	if (!languages.empty()) {
+		std::cout << "\nLanguages: ";
+		for (size_t i = 0; i < languages.size(); i++) {
+			std::cout << languages[i] << ' ';
+		}
+	} else std::cout << '\n';
+	if (!platforms.empty()) {
+		std::cout << "\nPlatforms: ";
+		for (size_t i = 0; i < platforms.size(); i++) {
+			std::cout << platforms[i] << ' ';
+		}
+	} else std::cout << '\n';
+	if (!aliases.empty()) {
+		std::cout << "\nAliases: ";
+		for (size_t i = 0; i < aliases.size(); i++) {
+			std::cout << aliases[i] << "  ";
+		}
+		std::cout << '\n';
+	} else std::cout << '\n';
+	if (length != 0) std::cout << "Game Length: " << length << "\n\n"; else std::cout << '\n';
+	if (description != "") {
+		for (size_t i = 0; i < description.size(); i++) {
+			if (description[i] != '\\') std::cout << description[i];
+			else if (description[i + 1] == 'n') { // new line when \n
+				std::cout << '\n';
+				i++;
+			}
+		}
+		std::cout << "\n\n";
+	} else std::cout << '\n';
+	std::cout << "Popularity: " << popularity << '\n';
+	std::cout << "Rating: " << rating << '\n';
+	std::cout << "Votecount: " << votecount << '\n';
+	std::cout << "\nLink to VN on VNDB: https://vndb.org/v" << vnid << "\n\n";
+	return;
+}
+
+void lookup() {
+	std::cout << '\n';
+	bool ask = true;
+	std::string input;
+	while (ask) {
+		std::cout << "What do you want to look up? (release/character/producer/staff): ";
+		std::cin >> input;
+		if (input == "release") { ask = false; lookupVN(); }
+		else if (input == "character") { ask = false; lookupVN(); }
+		else if (input == "producer") { ask = false; lookupVN(); }
+		else if (input == "staff") { ask = false; lookupVN(); }
+		else { std::cout << "\nInvalid input. \n"; }
+	}
+	std::cin.clear();
+	std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+	std::cout << '\n';
+	return;
+}
+
+void dbstats() {
+	std::cout << '\n';
+
+	std::string parse = fetchString("dbstats");
+
+	int tags = stoi(parseString("tags", parse, true, false));
+	int releases = stoi(parseString("releases", parse, true, false));
+	int producers = stoi(parseString("producers", parse, true, false));
+	int chars = stoi(parseString("chars", parse, true, false));
+	int vn = stoi(parseString("vn", parse, true, false));
+	int traits = stoi(parseString("traits", parse, true, false));
+	int staff = stoi(parseString("staff", parse, true, false));
+
+	std::cout
+		<< "Visual Novels: " << vn << '\n'
+		<< "Releases: " << releases << '\n'
+		<< "Characters: " << chars << '\n'
+		<< "Tags: " << tags << '\n'
+		<< "Traits: " << traits << '\n'
+		<< "Producers: " << producers << '\n'
+		<< "Staff: " << staff << "\n\n";
+
+	return;
+}
+
+void quote() {
+	std::cout << '\n';
+
+	std::string parse = fetchString("get quote basic (id >= 1) {\"results\": 1}");
+	int vnid = stoi(parseString("id", parse, true, false));
+	std::string quote = parseString("quote", parse, false, false);
+	std::string title = parseString("title", parse, true, false);
+
+	std::cout << quote << '\n' << "From: " << title << " VN ID: " << vnid << "\n\n";
+
 	return;
 }
 
@@ -438,8 +750,14 @@ void config() {
 void help() {
 	std::cout << '\n';
 	std::cout << "lastmod10     - Display your last 10 modified visual novels. \n";
-	std::cout << "lookup-user   - Enter user lookup mode \n";
+	std::cout << "playing       - Display your last 10 modified visual novels with label \"Playing\" \n";
+	std::cout << "stalled       - Display your last 10 modified visual novels with label \"Stalled\" \n";
+	std::cout << "wishlist      - Display your last 10 modified visual novels with label \"Wishlist\" \n";
 	std::cout << "lookup-vn     - Enter visual novel lookup mode \n";
+	std::cout << "lookup-user   - Enter user lookup mode \n";
+	std::cout << "lookup-other  - Enter extended lookup mode \n";
+	std::cout << "quote         - Get a random quote from VNDB \n";
+	std::cout << "dbstats       - Display VNDB database statistics \n";
 	std::cout << "help          - Display this help menu \n";
 	std::cout << "config        - Configure your UID \n";
 	std::cout << "direct        - Enter direct mode with VNDB server \n";
@@ -459,8 +777,14 @@ void menu() {
 		std::string menuBuffer;
 		getline(std::cin, menuBuffer);
 		if (menuBuffer == "lastmod10" && !uid.empty()) lastmod10();
-		if (menuBuffer == "lookup-user") lookupUser();
+		if (menuBuffer == "playing" && !uid.empty()) displayByLabel("Playing", "1");
+		if (menuBuffer == "stalled" && !uid.empty()) displayByLabel("Stalled", "3");
+		if (menuBuffer == "wishlist" && !uid.empty()) displayByLabel("Wishlist", "5");
 		if (menuBuffer == "lookup-vn") lookupVN();
+		if (menuBuffer == "lookup-user") lookupUser();
+		if (menuBuffer == "lookup-other") lookup();
+		if (menuBuffer == "quote") quote();
+		if (menuBuffer == "dbstats") dbstats();
 		if (menuBuffer == "help") help();
 		if (menuBuffer == "config") config();
 		if (menuBuffer == "direct") {
