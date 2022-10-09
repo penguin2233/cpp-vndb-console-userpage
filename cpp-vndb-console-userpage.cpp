@@ -5,16 +5,26 @@
 #include <mutex>
 #include <fstream>
 #include <boost/exception/all.hpp>
-#include <boost/bind.hpp>
+#include <boost/bind/bind.hpp>
 #include <boost/asio.hpp>
+
+#ifdef USING_SSL
+#include <boost/asio/ssl.hpp>
+#endif
 
 // Copyright (c) 2022 https://penguin2233.gq, no warranty is provided
 
 const std::string CLIENT_NAME = "cpp-vndb-console-userpage";
 const std::string CLIENT_VER = "MZ-E620-win";
 
+#ifdef USING_SSL
+boost::asio::io_context io_context;
+boost::asio::ssl::context sslcontext(boost::asio::ssl::context::sslv23);
+boost::asio::ssl::stream<boost::asio::ip::tcp::socket> mainsocket(io_context, sslcontext);
+#else
 boost::asio::io_service io_man;
 boost::asio::ip::tcp::socket mainsocket(io_man);
+#endif
 boost::system::error_code error;
 
 const char eofbyte = 0x04; // funny anidb EOT signal
@@ -94,14 +104,14 @@ std::vector<std::string> parseArray(std::string searchTerm, std::string raw, boo
 	if (removeQuotes) {
 		for (size_t i = 0; i < ret.size(); i++) {
 			if (ret[i].size() > 3) {
-				if (ret[i].size() > 2 && ret[i][ret[i].size() - 1] == ']' || ret[i].size() > 2 && ret[i][ret[i].size() - 2] == '}') {
+				if (ret[i].size() > 2 && ret[i][ret[i].size() - 1] == ']' || ret[i].size() > 2 && ret[i][ret[i].size() - 2] == '}' || ret[i].size() > 2 && ret[i][ret[i].size() - 2] == ']') {
 					if (ret[i][ret[i].size() - 2] == '}') {
 						if (ret[i][ret[i].size() - 1] == 0x04) ret[i].erase(ret[i].size() - 5, ret[i].size());
 						else if (ret[i][ret[i].size() - 3] == ']')  ret[i].erase(ret[i].size() - 4, ret[i].size());
 						else ret[i].erase(ret[i].size() - 2, ret[i].size());
 					}
 					if (ret[i][ret[i].size() - 2] == ']') {
-						ret[i].erase(ret[i].size() - 3, ret[i].size());
+						ret[i].erase(ret[i].size() - 2, ret[i].size());
 					}
 				}
 			}
@@ -145,22 +155,24 @@ std::string parseString(std::string searchTerm, std::string raw, bool integer, b
 		std::string secondPass = raw.substr(location + 1 + searchTerm.size() + 2, raw.size());
 		size_t end = secondPass.find(",\"");
 		std::string value = secondPass.substr(0, end);
-		if (value == "null" || value == "null}]" || value == "null}") {
+		if (value == "null" || value == "null}]" || value == "null}" || value == "\"\"") {
 			if (integer == true) return "0"; else return "";
 		}
 		else ret = value;
 		if (value[0] == '\"' && removeQuotes) {
 			value = value.substr(1, value.size() - 2);
+			if (value[value.size() - 1] == '}') value = value.substr(0, value.size() - 2);
 			if (value.size() > 2 && value[value.size() - 1] == ']' || value.size() > 2 && value[value.size() - 1] == '}') {
 				if (value.size() > 10 && value[value.size() - 5] != 'u' && value[value.size() - 4] != 'r' && value[value.size() - 3] != 'l') {
-						if (value[value.size() - 2] == ']') {
-							value.erase(value.size() - 3, value.size());
-						}
-						if (value[value.size() - 2] == '}') {
-							if (value[value.size() - 3] == ']')  value.erase(value.size() - 4, value.size());
-							else value.erase(value.size() - 2, value.size());
-						}
+					if (value[value.size() - 2] == ']') {
+						value.erase(value.size() - 3, value.size());
+					}
+					if (value[value.size() - 2] == '}') {
+						if (value[value.size() - 3] == ']')  value.erase(value.size() - 4, value.size());
+						else value.erase(value.size() - 2, value.size());
+					}
 				}
+
 				/*if (value[value.size() - 2] == '}') {
 					if (value[value.size() - 3] == ']')  value.erase(value.size() - 4, value.size());
 					else value.erase(value.size() - 2, value.size());
@@ -177,6 +189,10 @@ std::string parseString(std::string searchTerm, std::string raw, bool integer, b
 				else if (value[value.size() - 2] == ']') {
 					value.erase(value.size() - 2, value.size());
 				}
+			}
+			if (value == "null") {
+				if (integer == true) return "0"; 
+				else return "";
 			}
 			ret = value;
 		}
@@ -518,7 +534,7 @@ void lookupVN() {
 	// details - aliases
 	std::vector<std::string> aliases;
 	std::string aliasesRaw = parseString("aliases", parse, false, true);
-	if (aliasesRaw != "") {
+	if (aliasesRaw != "" && aliasesRaw != "\"null}\"") {
 		bool listEnd = false;
 		while (!listEnd) {
 			size_t location = aliasesRaw.find("\\n");
@@ -528,9 +544,11 @@ void lookupVN() {
 			}
 			else listEnd = true;
 		}
-		if (aliasesRaw[aliasesRaw.size() - 2] == '}') aliasesRaw = aliasesRaw.substr(0, aliasesRaw.size() - 3);
+		// if (aliasesRaw[aliasesRaw.size() - 2] == '}') aliasesRaw = aliasesRaw.substr(0, aliasesRaw.size() - 3);
+		if (aliasesRaw[aliasesRaw.size() - 1] == '}') aliasesRaw = aliasesRaw.substr(0, aliasesRaw.size() - 2);
+		// if (aliasesRaw[aliasesRaw.size() - 1] == '}') aliasesRaw = aliasesRaw.substr(0, aliasesRaw.size() - 2);
 		aliases.push_back('\"' + aliasesRaw + '\"');
-		if (aliases[aliases.size() - 1][aliases[aliases.size() - 1].size() - 1] == '\"' 
+		if (aliases[aliases.size() - 1][aliases[aliases.size() - 1].size() - 1] == '\"'
 			&& aliases[aliases.size() - 1][aliases[aliases.size() - 1].size() - 2] == '}'
 			&& aliases[aliases.size() - 1][aliases[aliases.size() - 1].size() - 3] == ']'
 			&& aliases[aliases.size() - 1][aliases[aliases.size() - 1].size() - 4] == '\"') {
@@ -558,20 +576,23 @@ void lookupVN() {
 		for (size_t i = 0; i < languages.size(); i++) {
 			std::cout << languages[i] << ' ';
 		}
-	} else std::cout << '\n';
+	}
+	else std::cout << '\n';
 	if (!platforms.empty()) {
 		std::cout << "\nPlatforms: ";
 		for (size_t i = 0; i < platforms.size(); i++) {
 			std::cout << platforms[i] << ' ';
 		}
-	} else std::cout << '\n';
+	}
+	else std::cout << '\n';
 	if (!aliases.empty()) {
 		std::cout << "\nAliases: ";
 		for (size_t i = 0; i < aliases.size(); i++) {
 			std::cout << aliases[i] << "  ";
 		}
 		std::cout << '\n';
-	} else std::cout << '\n';
+	}
+	else std::cout << '\n';
 	if (length != 0) std::cout << "Game Length: " << length << "\n\n"; else std::cout << '\n';
 	if (description != "") {
 		for (size_t i = 0; i < description.size(); i++) {
@@ -582,7 +603,8 @@ void lookupVN() {
 			}
 		}
 		std::cout << "\n\n";
-	} else std::cout << '\n';
+	}
+	else std::cout << '\n';
 	std::cout << "Popularity: " << popularity << '\n';
 	std::cout << "Rating: " << rating << '\n';
 	std::cout << "Votecount: " << votecount << '\n';
@@ -590,7 +612,7 @@ void lookupVN() {
 	return;
 }
 
-void lookup() {
+void lookup() { // not fully implemented yet
 	std::cout << '\n';
 	bool ask = true;
 	std::string input;
@@ -636,18 +658,34 @@ void dbstats() {
 
 void quote() {
 	std::cout << '\n';
-
 	std::string parse = fetchString("get quote basic (id >= 1) {\"results\": 1}");
 	int vnid = stoi(parseString("id", parse, true, false));
 	std::string quote = parseString("quote", parse, false, false);
 	std::string title = parseString("title", parse, true, false);
-
 	std::cout << quote << '\n' << "From: " << title << " VN ID: " << vnid << "\n\n";
-
 	return;
 }
 
 void connect() {
+#ifdef USING_SSL
+	// set up ssl
+	sslcontext.set_default_verify_paths();
+	boost::asio::ip::tcp::resolver resolver(io_context);
+	boost::asio::ip::tcp::resolver::query query("api.vndb.org", "19535"); // TCP yes TLS
+	try { // connect with SSL
+		boost::asio::connect(mainsocket.lowest_layer(), resolver.resolve(query));
+		mainsocket.lowest_layer().set_option(boost::asio::ip::tcp::no_delay(true));
+		mainsocket.set_verify_mode(boost::asio::ssl::verify_peer);
+		mainsocket.set_verify_callback(boost::asio::ssl::host_name_verification("vndb.org"));
+		mainsocket.handshake(boost::asio::ssl::stream<boost::asio::ip::tcp::socket>::client);
+	}
+	catch (boost::exception& e) {
+		std::cout << "Exception thrown trying to connect with SSL. " << boost::diagnostic_information(e) << '\n';
+		return;
+	}
+	std::cout << "Socket opened (SSL). \n";
+	std::cout << "Logging in... \n\n";
+#else
 	// open socket to vndb server
 	boost::asio::ip::tcp::resolver resolver(io_man);
 	boost::asio::ip::tcp::resolver::query query("api.vndb.org", "19534"); // TCP no TLS
@@ -661,8 +699,8 @@ void connect() {
 		return;
 	}
 	std::cout << "Socket opened. \n";
-	std::cout << "Connecting... \n\n";
-
+	std::cout << "Logging in... \n\n";
+#endif
 	// login
 	std::string credentials = "login{ \"protocol\":1,\"client\":\"" + CLIENT_NAME + "\",\"clientver\":\"" + CLIENT_VER + "\"}";
 	boost::asio::write(mainsocket, boost::asio::buffer(credentials), error);
